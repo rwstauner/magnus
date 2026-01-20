@@ -341,7 +341,7 @@ where
                 dfree,
                 dsize,
                 dcompact,
-                #[cfg(not(ruby_gt_4_0))]
+                #[cfg(ruby_gte_2_7)]
                 reserved: [ptr::null_mut(); 1],
                 #[cfg(ruby_gt_4_0)]
                 handle_weak_references: None,
