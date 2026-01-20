@@ -343,7 +343,7 @@ where
                 dsize,
                 #[cfg(ruby_gte_2_7)]
                 dcompact,
-                #[cfg(all(ruby_gte_2_7, not(ruby_gt_4_0)))]
+                #[cfg(ruby_gte_2_7)]
                 reserved: [ptr::null_mut(); 1],
                 #[cfg(ruby_lt_2_7)]
                 reserved: [ptr::null_mut(); 2],
