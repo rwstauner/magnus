@@ -7,8 +7,7 @@ use std::{
     ffi::CString,
     fmt,
     os::raw::c_char,
-    ptr::{null, NonNull},
-    slice,
+    ptr::null,
 };
 
 #[cfg(ruby_gte_3_3)]
@@ -30,43 +29,6 @@ use crate::{
     value::{self, private::ReprValue as _, IntoId, NonZeroValue, ReprValue, Value},
     Ruby,
 };
-
-// Ruby provides some inline functions to get a pointer to the struct's
-// contents, but we have to reimplement those for Rust. The for that we need
-// the definition of RStruct, but that isn't public, so we have to duplicate it
-// here.
-mod sys {
-    #[cfg(ruby_lt_3_0)]
-    use rb_sys::ruby_fl_type::RUBY_FL_USHIFT;
-    #[cfg(ruby_gte_3_0)]
-    use rb_sys::ruby_fl_ushift::RUBY_FL_USHIFT;
-    use rb_sys::{ruby_fl_type, RBasic, VALUE};
-
-    pub const EMBED_LEN_MAX: u32 = rb_sys::ruby_rvalue_flags::RVALUE_EMBED_LEN_MAX as u32;
-
-    pub const EMBED_LEN_MASK: u32 =
-        ruby_fl_type::RUBY_FL_USER2 as u32 | ruby_fl_type::RUBY_FL_USER1 as u32;
-    pub const EMBED_LEN_SHIFT: u32 = RUBY_FL_USHIFT as u32 + 1;
-
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    pub struct RStruct {
-        pub basic: RBasic,
-        pub as_: As,
-    }
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    pub union As {
-        pub heap: Heap,
-        pub ary: [VALUE; EMBED_LEN_MAX as usize],
-    }
-    #[repr(C)]
-    #[derive(Debug, Copy, Clone)]
-    pub struct Heap {
-        pub len: std::os::raw::c_long,
-        pub ptr: *const VALUE,
-    }
-}
 
 /// A Value pointer to a RStruct struct, Ruby’s internal representation of
 /// 'Structs'.
@@ -106,80 +68,6 @@ impl RStruct {
 
     pub(crate) unsafe fn from_rb_value_unchecked(val: VALUE) -> Self {
         Self(NonZeroValue::new_unchecked(Value::new(val)))
-    }
-
-    fn as_internal(self) -> NonNull<sys::RStruct> {
-        // safe as inner value is NonZero
-        unsafe { NonNull::new_unchecked(self.0.get().as_rb_value() as *mut _) }
-    }
-
-    /// Return the members of the struct as a slice of [`Value`]s. The order
-    /// will be the order the of the member names when the struct class was
-    /// defined.
-    ///
-    /// # Safety
-    ///
-    /// Ruby may modify or free the memory backing the returned slice, the
-    /// caller must ensure this does not happen.
-    unsafe fn as_slice(&self) -> &[Value] {
-        self.as_slice_unconstrained()
-    }
-
-    unsafe fn as_slice_unconstrained<'a>(self) -> &'a [Value] {
-        debug_assert_value!(self);
-        let r_basic = self.r_basic_unchecked();
-        let flags = r_basic.as_ref().flags;
-        if (flags & sys::EMBED_LEN_MASK as VALUE) != 0 {
-            let len = (flags & sys::EMBED_LEN_MASK as VALUE) >> sys::EMBED_LEN_SHIFT as VALUE;
-            slice::from_raw_parts(
-                &self.as_internal().as_ref().as_.ary as *const VALUE as *const Value,
-                len as usize,
-            )
-        } else {
-            let h = self.as_internal().as_ref().as_.heap;
-            slice::from_raw_parts(h.ptr as *const Value, h.len as usize)
-        }
-    }
-
-    /// Return the value for the member at `index`, where members are ordered
-    /// as per the member names when the struct class was defined.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use magnus::{prelude::*, Error, RStruct, Ruby};
-    ///
-    /// fn example(ruby: &Ruby) -> Result<(), Error> {
-    ///     let struct_class = ruby.define_struct(None, ("foo", "bar"))?;
-    ///     let instance = RStruct::from_value(struct_class.new_instance((1, 2))?).unwrap();
-    ///     assert_eq!(instance.get::<i64>(0)?, 1);
-    ///     assert_eq!(instance.get::<i64>(1)?, 2);
-    ///
-    ///     Ok(())
-    /// }
-    /// # Ruby::init(example).unwrap()
-    /// ```
-    pub fn get<T>(self, index: usize) -> Result<T, Error>
-    where
-        T: TryConvert,
-    {
-        unsafe {
-            let slice = self.as_slice();
-            slice
-                .get(index)
-                .copied()
-                .ok_or_else(|| {
-                    Error::new(
-                        Ruby::get_with(self).exception_index_error(),
-                        format!(
-                            "offset {} too large for struct(size:{})",
-                            index,
-                            slice.len()
-                        ),
-                    )
-                })
-                .and_then(TryConvert::try_convert)
-        }
     }
 
     /// Return the value for the member at `index`.
